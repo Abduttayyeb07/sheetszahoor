@@ -1,0 +1,5 @@
+node_modules/
+dist/
+*.json.bak
+fit-sanctum-478115-c1-828f08dbfbde.json
+.env

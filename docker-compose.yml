@@ -1,0 +1,11 @@
+services:
+  sheets-sync:
+    build: .
+    container_name: sheets-sync
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - GOOGLE_CREDENTIALS_PATH=/app/credentials.json
+    volumes:
+      - ./fit-sanctum-478115-c1-828f08dbfbde.json:/app/credentials.json:ro

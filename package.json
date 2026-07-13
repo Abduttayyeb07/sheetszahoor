@@ -1,0 +1,23 @@
+{
+  "name": "sheets-zahoor",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "sync": "tsx src/sync.ts",
+    "sync:dry-run": "tsx src/sync.ts --dry-run",
+    "start": "tsx src/index.ts",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@types/node": "^26.1.1",
+    "dotenv": "^17.4.2",
+    "googleapis": "^173.0.0",
+    "tsx": "^4.23.1",
+    "typescript": "^7.0.2"
+  }
+}
