@@ -1,5 +1,5 @@
 import { getSheetsClient } from "./gsheets";
-import { getVaultDayTotals, VaultDayTotal } from "./db";
+import { getVaultDayTotals } from "./db";
 import { SHEET_A_ID, VAULTS, FIRST_DATA_ROW, LAST_COL, VaultConfig } from "./config";
 import { todayKey, round2 } from "./utils";
 
@@ -103,24 +103,11 @@ export async function runSyncAll(dryRun: boolean) {
   if (states.length === 0) return;
 
   const today = todayKey();
-  const from = states.map((s) => s.lastDateKey).sort()[0]; // earliest lastDateKey across vaults
-  const rows = await getVaultDayTotals(
-    states.map((s) => s.vault.address),
-    from,
-    today
-  );
-
-  const byVault = new Map<string, VaultDayTotal[]>();
-  for (const row of rows) {
-    const list = byVault.get(row.vault_address) ?? [];
-    list.push(row);
-    byVault.set(row.vault_address, list);
-  }
 
   for (const state of states) {
     const { vault, sheetATabId } = state;
     let { lastRow, lastDateKey } = state;
-    const vaultRows = byVault.get(vault.address) ?? [];
+    const vaultRows = await getVaultDayTotals(vault, lastDateKey, today);
     const totals = new Map(vaultRows.map((r) => [r.date, { in: Number(r.usdc_in), out: Number(r.usdc_out) }]));
 
     const alreadyHandledToday = lastDateKey === today;
