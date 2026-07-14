@@ -10,6 +10,14 @@ function requireEnv(name: string): string {
 }
 
 function getSshAuth() {
+  const inlineKey = process.env.SSH_PRIVATE_KEY;
+  if (inlineKey) {
+    return {
+      privateKey: inlineKey,
+      passphrase: process.env.SSH_PASSPHRASE || undefined,
+    };
+  }
+
   const keyPath = process.env.SSH_KEY_PATH;
   if (keyPath) {
     return {
@@ -17,6 +25,7 @@ function getSshAuth() {
       passphrase: process.env.SSH_PASSPHRASE || undefined,
     };
   }
+
   return { password: requireEnv("SSH_PASSWORD") };
 }
 
