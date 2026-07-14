@@ -1,18 +1,7 @@
 import { getSheetsClient } from "./gsheets";
-import {
-  SHEET_A_ID,
-  SHEET_B_ID,
-  VAULTS,
-  FIRST_DATA_ROW,
-  LAST_COL,
-  VaultConfig,
-} from "./config";
-import { parseUsdcAmount, timestampToDateKey, todayKey } from "./utils";
-
-interface DayTotals {
-  in: number;
-  out: number;
-}
+import { getVaultDayTotals, VaultDayTotal } from "./db";
+import { SHEET_A_ID, VAULTS, FIRST_DATA_ROW, LAST_COL, VaultConfig } from "./config";
+import { todayKey, round2 } from "./utils";
 
 async function getSheetAState(sheets: any, tab: string) {
   const res = await sheets.spreadsheets.values.get({
@@ -27,31 +16,6 @@ async function getSheetAState(sheets: any, tab: string) {
   return { lastRow, lastDateKey };
 }
 
-async function getSheetBAggregates(sheets: any, tab: string) {
-  const res = await sheets.spreadsheets.values.get({
-    spreadsheetId: SHEET_B_ID,
-    range: `'${tab}'!A2:G1000`,
-  });
-  const rows: string[][] = res.data.values ?? [];
-  const totals = new Map<string, DayTotals>();
-
-  for (const row of rows) {
-    const [timestamp, , , direction, , , amountRaw] = row;
-    if (!timestamp || !direction || !amountRaw) continue;
-    const amount = parseUsdcAmount(amountRaw);
-    if (amount === null) continue; // skip non-USDC transactions
-
-    const key = timestampToDateKey(timestamp);
-    const entry = totals.get(key) ?? { in: 0, out: 0 };
-    const dir = direction.trim().toUpperCase();
-    if (dir === "INFLOW") entry.in += amount;
-    else if (dir === "OUTFLOW") entry.out += amount;
-    else continue;
-    totals.set(key, entry);
-  }
-  return totals;
-}
-
 async function getSheetIdByTitle(sheets: any, spreadsheetId: string, title: string): Promise<number> {
   const meta = await sheets.spreadsheets.get({ spreadsheetId });
   const sheet = meta.data.sheets.find((s: any) => s.properties.title === title);
@@ -59,7 +23,7 @@ async function getSheetIdByTitle(sheets: any, spreadsheetId: string, title: stri
   return sheet.properties.sheetId;
 }
 
-async function appendFormulaRow(sheets: any, sheetId: number, destRow: number, srcRow: number) {
+async function appendFormattedRow(sheets: any, sheetId: number, destRow: number, srcRow: number) {
   await sheets.spreadsheets.batchUpdate({
     spreadsheetId: SHEET_A_ID,
     requestBody: {
@@ -114,64 +78,81 @@ async function writeDateAndCapital(
   await writeCapital(sheets, tab, row, capIn, capOut);
 }
 
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
-}
-
-export async function syncVault(vault: VaultConfig, dryRun: boolean) {
-  const sheets = getSheetsClient();
-
-  const [{ lastRow, lastDateKey }, totals, sheetATabId] = await Promise.all([
-    getSheetAState(sheets, vault.sheetATab),
-    getSheetBAggregates(sheets, vault.sheetBTab),
-    getSheetIdByTitle(sheets, SHEET_A_ID, vault.sheetATab),
-  ]);
-
-  if (lastRow === null || lastDateKey === null) {
-    console.log(`[${vault.name}] No existing rows found in Sheet A — skipping (needs a manually seeded first row).`);
-    return;
-  }
-
-  const today = todayKey();
-  let cursorRow = lastRow;
-  const alreadyHandledToday = lastDateKey === today;
-
-  // If the last row already IS today's row, recompute and overwrite it in place.
-  if (alreadyHandledToday) {
-    const t = totals.get(today);
-    if (t && (t.in !== 0 || t.out !== 0)) {
-      console.log(`${dryRun ? "[DRY-RUN] " : ""}[${vault.name}] Update today's row (row ${cursorRow}, ${today}) -> in=${round2(t.in)} out=${round2(t.out)}`);
-      if (!dryRun) await writeCapital(sheets, vault.sheetATab, cursorRow, round2(t.in), round2(t.out));
-    }
-  }
-
-  // Every other date strictly after the last frozen row gets appended, in order.
-  const datesToAppend = [...totals.keys()]
-    .filter((k) => k > lastDateKey)
-    .filter((k) => !(alreadyHandledToday && k === today))
-    .sort();
-
-  for (const key of datesToAppend) {
-    const t = totals.get(key)!;
-    if (t.in === 0 && t.out === 0) continue; // skip zero-movement days
-
-    const destRow = cursorRow + 1;
-    console.log(`${dryRun ? "[DRY-RUN] " : ""}[${vault.name}] Append row ${destRow} for ${key} -> in=${round2(t.in)} out=${round2(t.out)}`);
-    if (!dryRun) {
-      await appendFormulaRow(sheets, sheetATabId, destRow, cursorRow);
-      await writeDateAndCapital(sheets, vault.sheetATab, destRow, key, round2(t.in), round2(t.out));
-    }
-
-    cursorRow = destRow;
-  }
+interface VaultState {
+  vault: VaultConfig;
+  lastRow: number;
+  lastDateKey: string;
+  sheetATabId: number;
 }
 
 export async function runSyncAll(dryRun: boolean) {
+  const sheets = getSheetsClient();
+
+  const states: VaultState[] = [];
   for (const vault of VAULTS) {
-    try {
-      await syncVault(vault, dryRun);
-    } catch (e: any) {
-      console.error(`[${vault.name}] ERROR:`, e.message);
+    const [{ lastRow, lastDateKey }, sheetATabId] = await Promise.all([
+      getSheetAState(sheets, vault.sheetATab),
+      getSheetIdByTitle(sheets, SHEET_A_ID, vault.sheetATab),
+    ]);
+    if (lastRow === null || lastDateKey === null) {
+      console.log(`[${vault.name}] No existing rows found in Sheet A — skipping (needs a manually seeded first row).`);
+      continue;
+    }
+    states.push({ vault, lastRow, lastDateKey, sheetATabId });
+  }
+  if (states.length === 0) return;
+
+  const today = todayKey();
+  const from = states.map((s) => s.lastDateKey).sort()[0]; // earliest lastDateKey across vaults
+  const rows = await getVaultDayTotals(
+    states.map((s) => s.vault.address),
+    from,
+    today
+  );
+
+  const byVault = new Map<string, VaultDayTotal[]>();
+  for (const row of rows) {
+    const list = byVault.get(row.vault_address) ?? [];
+    list.push(row);
+    byVault.set(row.vault_address, list);
+  }
+
+  for (const state of states) {
+    const { vault, sheetATabId } = state;
+    let { lastRow, lastDateKey } = state;
+    const vaultRows = byVault.get(vault.address) ?? [];
+    const totals = new Map(vaultRows.map((r) => [r.date, { in: Number(r.usdc_in), out: Number(r.usdc_out) }]));
+
+    const alreadyHandledToday = lastDateKey === today;
+    if (alreadyHandledToday) {
+      const t = totals.get(today);
+      if (t && (t.in !== 0 || t.out !== 0)) {
+        console.log(
+          `${dryRun ? "[DRY-RUN] " : ""}[${vault.name}] Update today's row (row ${lastRow}, ${today}) -> in=${round2(t.in)} out=${round2(t.out)}`
+        );
+        if (!dryRun) await writeCapital(sheets, vault.sheetATab, lastRow, round2(t.in), round2(t.out));
+      }
+    }
+
+    const datesToAppend = [...totals.keys()]
+      .filter((k) => k > lastDateKey)
+      .filter((k) => !(alreadyHandledToday && k === today))
+      .sort();
+
+    let cursorRow = lastRow;
+    for (const key of datesToAppend) {
+      const t = totals.get(key)!;
+      if (t.in === 0 && t.out === 0) continue; // skip zero-movement days
+
+      const destRow = cursorRow + 1;
+      console.log(
+        `${dryRun ? "[DRY-RUN] " : ""}[${vault.name}] Append row ${destRow} for ${key} -> in=${round2(t.in)} out=${round2(t.out)}`
+      );
+      if (!dryRun) {
+        await appendFormattedRow(sheets, sheetATabId, destRow, cursorRow);
+        await writeDateAndCapital(sheets, vault.sheetATab, destRow, key, round2(t.in), round2(t.out));
+      }
+      cursorRow = destRow;
     }
   }
 }

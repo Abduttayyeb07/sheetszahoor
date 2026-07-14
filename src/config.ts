@@ -7,42 +7,36 @@ function requireEnv(name: string): string {
 }
 
 export const SHEET_A_ID = requireEnv("SHEET_A_ID");
-export const SHEET_B_ID = requireEnv("SHEET_B_ID");
 
 export interface VaultConfig {
   name: string;
-  sheetBTab: string;
+  address: string;
   sheetATab: string;
 }
 
 export const VAULTS: VaultConfig[] = [
   {
     name: "Stablecoin Yield Vault",
-    sheetBTab: "Stablecoin Yield Vault",
+    address: "zig1h3au5n3lsyqm32ydz3usgy7r9z7wpx4gttcxmypfecz29adtu64svluenp",
     sheetATab: "Stablecoin_Yield_Vault",
   },
   {
     name: "USDC Opportunistic Credit Vault",
-    sheetBTab: "USDC Opportunistic Credit Vault",
+    address: "zig1mayx7wkzensav40j3qc8c5lh6s884jlhsu0c0js058t4u9xcg0mql58gkq",
     sheetATab: "Opportunistic_Credit_Vault",
   },
   {
     name: "USDC Core Income Vault",
-    sheetBTab: "USDC CORE income vault",
+    address: "zig1m526fltgrf70qdsufx9k9fdl4x07usjlydcn32jn83fs6za9c5cswd9grk",
     sheetATab: "Core_Income_Vault",
   },
 ];
 
-// Row in Sheet A where the "Date | Day# | ... | Capital In | Capital Out | ..." header lives.
-export const HEADER_ROW = 10;
-// First data row.
+// First data row in each Sheet A vault tab (row 10 is the header).
 export const FIRST_DATA_ROW = 11;
-
-// Column indices (1-based) in Sheet A data rows.
-export const COL_DATE = 1; // A
-export const COL_CAPITAL_IN = 4; // D
-export const COL_CAPITAL_OUT = 5; // E
-export const LAST_COL = 12; // L
+// Columns A..L are the full row width (Date .. Yield Check); used when
+// copying formulas + formatting down to a newly appended row.
+export const LAST_COL = 12;
 
 // Poll interval for the ongoing sync, in milliseconds.
 export const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS ?? 60 * 60 * 1000);
