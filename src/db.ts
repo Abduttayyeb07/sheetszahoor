@@ -31,14 +31,13 @@ export interface DayTotal {
 }
 
 // Sums USDC capital movements per calendar day, for one vault, over [from, to]
-// inclusive. Two event shapes carry the real data:
-//   - Inflows (subscriptions): a "wasm-vault_deposit" event on the vault
-//     CONTRACT address, carrying an "asset_amount" attribute.
-//   - Outflows (redemptions): an "ibc_transfer" event sent FROM the vault's
-//     separate TREASURY/funds-manager address out to the bridge, carrying
-//     sender/receiver/denom/amount attributes in that fixed order.
-// (The original query's "request_redeem"/"approve_request" methods don't
-// exist in this dataset — verified against real transactions.)
+// inclusive. Both event types live on the vault CONTRACT address and carry
+// an explicit "asset_amount" attribute:
+//   - Inflows (subscriptions): "wasm-vault_deposit"
+//   - Outflows (redemptions):  "wasm-vault_redemption_requested" — fired the
+//     moment a user requests a specific redemption amount. This is the real
+//     signal for Capital Out; a raw outbound treasury transfer is NOT used
+//     here since it isn't necessarily tied to a specific user request.
 export async function getVaultDayTotals(vault: VaultConfig, from: string, to: string): Promise<DayTotal[]> {
   const ch = getClient();
 
@@ -51,6 +50,7 @@ export async function getVaultDayTotals(vault: VaultConfig, from: string, to: st
       FROM ${TABLE}
       WHERE has(involved_addresses, {contractAddress:String})
         AND toDate(time) BETWEEN {from:Date} AND {to:Date}
+        AND position(events, '"type":"wasm-vault_deposit"') > 0
         AND position(events, concat('"_contract_address","value":"', {contractAddress:String}, '"},{"index":true,"key":"method","value":"deposit"')) > 0
 
       UNION ALL
@@ -58,19 +58,12 @@ export async function getVaultDayTotals(vault: VaultConfig, from: string, to: st
       SELECT
         toDate(time) AS date,
         CAST(0 AS Float64) AS usdc_in,
-        toFloat64OrZero(
-          extract(
-            events,
-            concat(
-              '"sender","value":"', {treasuryAddress:String}, '"},{"index":true,"key":"receiver","value":"[^"]*"},{"index":true,"key":"denom","value":"[^"]*"},{"index":true,"key":"amount","value":"([0-9]+)"'
-            )
-          )
-        ) / 1000000 AS usdc_out
+        toFloat64OrZero(extract(events, '"asset_amount","value":"([0-9]+)"')) / 1000000 AS usdc_out
       FROM ${TABLE}
-      WHERE has(involved_addresses, {treasuryAddress:String})
+      WHERE has(involved_addresses, {contractAddress:String})
         AND toDate(time) BETWEEN {from:Date} AND {to:Date}
-        AND position(events, '"type":"ibc_transfer"') > 0
-        AND position(events, concat('"sender","value":"', {treasuryAddress:String}, '"},{"index":true,"key":"receiver"')) > 0
+        AND position(events, '"type":"wasm-vault_redemption_requested"') > 0
+        AND position(events, concat('"_contract_address","value":"', {contractAddress:String}, '"},{"index":true,"key":"method","value":"request_redeem"')) > 0
     )
     SELECT
       date,
@@ -85,7 +78,6 @@ export async function getVaultDayTotals(vault: VaultConfig, from: string, to: st
     query,
     query_params: {
       contractAddress: vault.contractAddress,
-      treasuryAddress: vault.treasuryAddress,
       from,
       to,
     },
